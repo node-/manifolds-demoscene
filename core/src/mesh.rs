@@ -68,7 +68,7 @@ impl Mesh {
     /// Used by surfaces (Calabi–Yau) where per-vertex normals aren't analytic.
     pub fn recompute_normals(&mut self) {
         let mut accum = vec![Vec3::ZERO; self.vertices.len()];
-        for tri in self.indices.chunks_exact(3) {
+        for tri in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
             let pa = Vec3::from_array(self.vertices[a].position);
             let pb = Vec3::from_array(self.vertices[b].position);

@@ -9,6 +9,7 @@
 use super::Renderer;
 use core_graphics_types::geometry::CGSize;
 use dscore::{scene::FrameUniforms, Mesh, Vertex};
+use metal::foreign_types::ForeignType;
 use metal::{
     Buffer, CommandQueue, CompileOptions, DepthStencilDescriptor, DepthStencilState, Device,
     MTLClearColor, MTLCompareFunction, MTLIndexType, MTLLoadAction, MTLPixelFormat,
