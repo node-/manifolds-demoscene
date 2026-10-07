@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# Cargo.lock is intentionally committed: this is an app, and pinning the
+# transitive graph keeps the (locally-untestable) D3D12/Metal backends
+# reproducible in CI.
+
+# Local state and captures
+/profiles/
+/recordings/

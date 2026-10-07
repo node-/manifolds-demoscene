@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calabi–Yau viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f2f1ee; overflow: hidden; font: 12px/1.4 system-ui, sans-serif; color: #333; }
+  canvas { display: block; }
+  #ui { position: fixed; top: 12px; left: 12px; padding: 10px 12px; background: rgba(255,255,255,.75); backdrop-filter: blur(6px);
+        border-radius: 8px; width: 230px; }
+  #ui label { display: grid; grid-template-columns: 78px 1fr 34px; align-items: center; gap: 6px; margin: 4px 0; }
+  #ui output { text-align: right; font-variant-numeric: tabular-nums; }
+  #ui .row { display: flex; gap: 12px; margin-top: 6px; }
+  #hint { margin-top: 8px; color: #777; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <label>n (degree)  <input id="n" type="range" min="2" max="9" step="1" value="5"><output></output></label>
+  <label>resolution  <input id="res" type="range" min="8" max="64" step="1" value="32"><output></output></label>
+  <label>4D→3D angle <input id="alpha" type="range" min="0" max="3.1416" step="0.001" value="0.785"><output></output></label>
+  <label>spin speed  <input id="spin" type="range" min="0" max="2" step="0.01" value="0.35"><output></output></label>
+  <label>grid        <input id="grid" type="range" min="0" max="1" step="0.01" value="0.35"><output></output></label>
+  <div class="row">
+    <label style="display:block"><input id="auto" type="checkbox" checked> auto-rotate</label>
+    <label style="display:block"><input id="sweep" type="checkbox"> sweep angle</label>
+  </div>
+  <div id="hint">drag = orbit · wheel = zoom · right-drag = pan</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+// ---- Hanson's Calabi–Yau cross-section: z1^n + z2^n = 1 ----------------------
+// z1 = e^{2πi k1/n} cos(w)^{2/n},  z2 = e^{2πi k2/n} sin(w)^{2/n},  w = a + ib
+// Same parametrization as core/src/calabiyau.rs.
+function cpow(re, im, e) {
+  const r = Math.hypot(re, im);
+  if (r < 1e-9) return [0, 0];
+  const t = Math.atan2(im, re) * e, m = Math.pow(r, e);
+  return [m * Math.cos(t), m * Math.sin(t)];
+}
+function patchPoint(n, k1, k2, a, b, ca, sa, out, o) {
+  // cos(a+ib) = cos a cosh b - i sin a sinh b ; sin(a+ib) = sin a cosh b + i cos a sinh b
+  const ch = Math.cosh(b), sh = Math.sinh(b);
+  const c = cpow(Math.cos(a) * ch, -Math.sin(a) * sh, 2 / n);
+  const s = cpow(Math.sin(a) * ch,  Math.cos(a) * sh, 2 / n);
+  const p1 = 2 * Math.PI * k1 / n, p2 = 2 * Math.PI * k2 / n;
+  const z1r = Math.cos(p1) * c[0] - Math.sin(p1) * c[1], z1i = Math.sin(p1) * c[0] + Math.cos(p1) * c[1];
+  const z2r = Math.cos(p2) * s[0] - Math.sin(p2) * s[1], z2i = Math.sin(p2) * s[0] + Math.cos(p2) * s[1];
+  out[o] = z1r; out[o + 1] = z2r; out[o + 2] = z1i * ca + z2i * sa;   // Hanson projection
+}
+
+const state = { n: 5, res: 32, alpha: Math.PI / 4 };
+let geo = null, pos = null;
+
+function buildGeometry() {
+  const { n, res } = state, stride = res + 1;
+  const patches = n * n, vcount = patches * stride * stride;
+  pos = new Float32Array(vcount * 3);
+  const uv = new Float32Array(vcount * 2);
+  const idx = new Uint32Array(patches * res * res * 6);
+  let vi = 0, ii = 0;
+  for (let p = 0; p < patches; p++) {
+    const base = p * stride * stride;
+    for (let i = 0; i < stride; i++) for (let j = 0; j < stride; j++) {
+      const v = base + i * stride + j;
+      uv[v * 2] = i / res; uv[v * 2 + 1] = j / res;
+    }
+    for (let i = 0; i < res; i++) for (let j = 0; j < res; j++) {
+      const a = base + i * stride + j, b = a + 1, c = a + stride, d = c + 1;
+      idx.set([a, c, b, b, c, d], ii); ii += 6;
+    }
+  }
+  if (geo) geo.dispose();
+  geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  fillPositions();
+  mesh.geometry = geo;
+}
+
+function fillPositions() {
+  const { n, res, alpha } = state, stride = res + 1;
+  const ca = Math.cos(alpha), sa = Math.sin(alpha);
+  let o = 0;
+  for (let k1 = 0; k1 < n; k1++) for (let k2 = 0; k2 < n; k2++)
+    for (let i = 0; i < stride; i++) for (let j = 0; j < stride; j++) {
+      patchPoint(n, k1, k2, (i / res) * Math.PI / 2, (j / res - 0.5) * Math.PI, ca, sa, pos, o);
+      o += 3;
+    }
+  geo.attributes.position.needsUpdate = true;
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+}
+
+// ---- scene ---------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f1ee);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 100);
+camera.position.set(3.2, 1.8, 4.2);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 2.0;
+
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(3, 5, 4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 0.5, far: 20 });
+key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02;
+scene.add(key);
+
+// Fine quad-grid lines like the reference, via a tiled texture on each patch's uv.
+function gridTexture() {
+  const s = 64, c = document.createElement('canvas'); c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, s, s);
+  g.fillStyle = '#9a9a9a'; g.fillRect(0, 0, s, 2); g.fillRect(0, 0, 2, s);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const tex = gridTexture();
+const mat = new THREE.MeshStandardMaterial({
+  color: 0x8c8c8c, roughness: 0.62, metalness: 0.0, side: THREE.DoubleSide, envMapIntensity: 0.9,
+});
+const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+mesh.castShadow = mesh.receiveShadow = true;
+scene.add(mesh);
+
+function setGrid(amount) {
+  // Blend between a flat colour and the line texture by scaling texture contrast.
+  mat.map = amount > 0.001 ? tex : null;
+  mat.color.setScalar(0.55);
+  mat.needsUpdate = true;
+  tex.repeat.set(state.res / 2, state.res / 2);
+  mat.userData.gridAmount = amount;
+  // lerp map toward white: use aoMap-free trick — tint through color brightness.
+  mat.color.setScalar(0.55 + 0.1 * (1 - amount));
+}
+
+const ui = id => document.getElementById(id);
+const fmt = { n: v => v, res: v => v, alpha: v => (v / Math.PI).toFixed(2) + 'π', spin: v => (+v).toFixed(2), grid: v => (+v).toFixed(2) };
+function bind(id, fn) {
+  const el = ui(id), out = el.parentElement.querySelector('output');
+  const upd = () => { out.textContent = fmt[id](el.value); fn(+el.value); };
+  el.addEventListener('input', upd); upd();
+}
+bind('n', v => { state.n = v; buildGeometry(); setGrid(+ui('grid').value); });
+bind('res', v => { state.res = v; buildGeometry(); setGrid(+ui('grid').value); });
+bind('alpha', v => { state.alpha = v; fillPositions(); });
+bind('spin', v => { controls.autoRotateSpeed = v * 6; });
+bind('grid', setGrid);
+ui('auto').addEventListener('change', e => controls.autoRotate = e.target.checked);
+
+function fit() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', fit); fit();
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  if (ui('sweep').checked) {
+    const a = (Math.sin(clock.getElapsedTime() * 0.4) * 0.5 + 0.5) * Math.PI;
+    state.alpha = a; ui('alpha').value = a;
+    ui('alpha').parentElement.querySelector('output').textContent = fmt.alpha(a);
+    fillPositions();
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

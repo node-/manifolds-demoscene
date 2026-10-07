@@ -1,0 +1,16 @@
+[package]
+name = "demoscene-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+# Not "core": that shadows the std `core` crate inside macros that expand to
+# `::core::...` (e.g. the windows `s!` macro), breaking the D3D12 backend.
+name = "dscore"
+path = "src/lib.rs"
+
+[dependencies]
+glam = { workspace = true }
+num-complex = { workspace = true }
